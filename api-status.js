@@ -31,6 +31,8 @@ const services = {
 const history = loadHistory();
 services.roblox.outages = history.roblox.outages;
 services.erlc.outages = history.erlc.outages;
+services.roblox.baselinePercentage = history.roblox.baselinePercentage;
+services.erlc.baselinePercentage = history.erlc.baselinePercentage;
 
 let statusMessage = null;
 let updateInProgress = false;
@@ -51,14 +53,20 @@ function loadHistory() {
         const savedHistory = JSON.parse(fs.readFileSync(historyFile, 'utf8'));
         return {
             startedAt: savedHistory.startedAt || Date.now(),
-            roblox: { outages: Array.isArray(savedHistory.roblox?.outages) ? savedHistory.roblox.outages : [] },
-            erlc: { outages: Array.isArray(savedHistory.erlc?.outages) ? savedHistory.erlc.outages : [] }
+            roblox: {
+                baselinePercentage: savedHistory.roblox?.baselinePercentage ?? 99.91,
+                outages: Array.isArray(savedHistory.roblox?.outages) ? savedHistory.roblox.outages : []
+            },
+            erlc: {
+                baselinePercentage: savedHistory.erlc?.baselinePercentage ?? 99.39,
+                outages: Array.isArray(savedHistory.erlc?.outages) ? savedHistory.erlc.outages : []
+            }
         };
     } catch {
         return {
             startedAt: Date.now(),
-            roblox: { outages: [] },
-            erlc: { outages: [] }
+            roblox: { baselinePercentage: 99.91, outages: [] },
+            erlc: { baselinePercentage: 99.39, outages: [] }
         };
     }
 }
@@ -123,7 +131,7 @@ function getRollingUptime(service, now = Date.now()) {
     const windowStart = now - rollingWindowMs;
     const trackedMs = rollingWindowMs;
 
-    const downtimeMs = service.outages.reduce((total, outage) => {
+    const newDowntimeMs = service.outages.reduce((total, outage) => {
         const outageEnd = outage.endedAt || now;
         const overlapStart = Math.max(windowStart, outage.startedAt);
         const overlapEnd = Math.min(now, outageEnd);
@@ -131,7 +139,7 @@ function getRollingUptime(service, now = Date.now()) {
     }, 0);
 
     return {
-        percentage: Math.max(0, ((trackedMs - downtimeMs) / trackedMs) * 100),
+        percentage: Math.max(0, service.baselinePercentage - (newDowntimeMs / trackedMs) * 100),
         trackedMs
     };
 }
