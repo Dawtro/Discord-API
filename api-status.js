@@ -140,7 +140,8 @@ function getRollingUptime(service, now = Date.now()) {
 
     return {
         percentage: Math.max(0, service.baselinePercentage - (newDowntimeMs / trackedMs) * 100),
-        trackedMs
+        trackedMs,
+        downtimeMs: ((100 - service.baselinePercentage) / 100) * trackedMs + newDowntimeMs
     };
 }
 
@@ -170,7 +171,7 @@ function formatService(service) {
         ? `\nLast error: ${service.lastError}`
         : '';
 
-    return `${emoji} **${service.name}:** ${state}\nUptime/90d: ${uptime.percentage.toFixed(2)}%\nOutages: ${service.outages.length}\nTracked: ${formatDuration(uptime.trackedMs)}${outageDetails}${errorDetails}`;
+    return `${emoji} **${service.name}:** ${state}\nUptime/90d: ${uptime.percentage.toFixed(2)}%\nOutages: ${service.outages.length}\nTracked: ${formatDuration(uptime.trackedMs)}\nDowntime/90d: ${formatDuration(uptime.downtimeMs)}${outageDetails}${errorDetails}`;
 }
 
 async function getStatusChannel() {
