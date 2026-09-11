@@ -129,7 +129,7 @@ async function checkService(service, probe) {
 
 function getRollingUptime(service, now = Date.now()) {
     const windowStart = now - rollingWindowMs;
-    const trackedMs = rollingWindowMs;
+    const trackedMs = Math.min(rollingWindowMs, Math.max(0, now - history.startedAt));
 
     const newDowntimeMs = service.outages.reduce((total, outage) => {
         const outageEnd = outage.endedAt || now;
@@ -139,9 +139,8 @@ function getRollingUptime(service, now = Date.now()) {
     }, 0);
 
     return {
-        percentage: Math.max(0, service.baselinePercentage - (newDowntimeMs / trackedMs) * 100),
-        trackedMs,
-        downtimeMs: ((100 - service.baselinePercentage) / 100) * trackedMs + newDowntimeMs
+        percentage: Math.max(0, service.baselinePercentage - (newDowntimeMs / rollingWindowMs) * 100),
+        trackedMs
     };
 }
 
@@ -171,7 +170,7 @@ function formatService(service) {
         ? `\nLast error: ${service.lastError}`
         : '';
 
-    return `${emoji} **${service.name}:** ${state}\nUptime/90d: ${uptime.percentage.toFixed(2)}%\nOutages: ${service.outages.length}\nTracked: ${formatDuration(uptime.trackedMs)}\nDowntime/90d: ${formatDuration(uptime.downtimeMs)}${outageDetails}${errorDetails}`;
+    return `${emoji} **${service.name}:** ${state}\nUptime/90d: ${uptime.percentage.toFixed(2)}%\nOutages: ${service.outages.length}\nTracked: ${formatDuration(uptime.trackedMs)}${outageDetails}${errorDetails}`;
 }
 
 async function getStatusChannel() {
