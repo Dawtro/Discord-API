@@ -120,9 +120,8 @@ async function checkService(service, probe) {
 }
 
 function getRollingUptime(service, now = Date.now()) {
-    const windowStart = Math.max(now - rollingWindowMs, history.startedAt);
-    const trackedMs = now - windowStart;
-    if (trackedMs <= 0) return { percentage: 100, trackedMs: 0 };
+    const windowStart = now - rollingWindowMs;
+    const trackedMs = rollingWindowMs;
 
     const downtimeMs = service.outages.reduce((total, outage) => {
         const outageEnd = outage.endedAt || now;
@@ -215,7 +214,19 @@ async function updateStatusMessage() {
         if (!statusMessage) {
             statusMessage = await channel.send(payload);
         } else {
-            await statusMessage.edit(payload);
+            try {
+                await statusMessage.edit(payload);
+            } catch (error) {
+                if (error.code !== 10008) throw error;
+
+                console.warn('[API Status] Existing status message was missing. Creating a replacement.');
+                statusMessage = await findStatusMessage(channel);
+                if (statusMessage) {
+                    await statusMessage.edit(payload);
+                } else {
+                    statusMessage = await channel.send(payload);
+                }
+            }
         }
 
         console.log(`[API Status] Updated at ${new Date().toLocaleTimeString()}.`);
