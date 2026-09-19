@@ -2,5 +2,9 @@
   "token": "",
   "prefix": "?",
   "erlcKey": "",
-  "statusChannelId": "1509636962300989472"
+  "statusChannelId": "1509636962300989472",
+  "botOwnerId": "",
+  "sessionPermissionRoleId": "",
+  "sessionPermissionRoleNames": [],
+  "sessionVoteRoleIds": []
 }
