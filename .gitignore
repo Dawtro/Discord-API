@@ -1,0 +1,4 @@
+node_modules/
+.env
+guild-config.json
+guild-config.json.tmp
