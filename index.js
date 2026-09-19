@@ -1,31 +1,39 @@
-
 const {
     ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle,
     Client,
+    ChannelType,
     ContainerBuilder,
     GatewayIntentBits,
     MessageFlags,
+    PermissionFlagsBits,
     SeparatorBuilder,
     SlashCommandBuilder,
     TextDisplayBuilder
 } = require('discord.js');
 const axios = require('axios');
+const guildStore = require('./guild-store');
 
 const config = require('./config');
 
 const token = process.env.DISCORD_TOKEN || config.token;
+const botOwnerId = process.env.BOT_OWNER_ID || config.botOwnerId;
 const erlcKey = process.env.ERLC_SERVER_KEY || config.erlcKey;
 const statusChannelId = process.env.STATUS_CHANNEL_ID || config.statusChannelId;
 const updateIntervalMs = 45_000;
-const sessionPermissionRoleId = process.env.SESSION_PERMISSION_ROLE_ID;
+const sessionPermissionRoleId = process.env.SESSION_PERMISSION_ROLE_ID || config.sessionPermissionRoleId;
+const sessionPermissionRoleNameConfig = process.env.SESSION_PERMISSION_ROLE_NAME
+    ? [process.env.SESSION_PERMISSION_ROLE_NAME]
+    : config.sessionPermissionRoleNames || [];
 const sessionPermissionRoleNames = new Set([
-    process.env.SESSION_PERMISSION_ROLE_NAME || 'Session Permission Role',
+    ...sessionPermissionRoleNameConfig,
+    'Session Permission Role',
     'Session Startup Permission Role'
 ]);
-const sessionVoteRoleIds = (process.env.SESSION_VOTE_ROLE_IDS || '')
-    .split(',')
+const sessionVoteRoleIds = (process.env.SESSION_VOTE_ROLE_IDS
+    ? process.env.SESSION_VOTE_ROLE_IDS.split(',')
+    : config.sessionVoteRoleIds || [])
     .map((roleId) => roleId.trim())
     .filter((roleId) => /^\d{17,20}$/.test(roleId));
 const requiredSessionVotes = 3;
@@ -71,6 +79,26 @@ client.on('interactionCreate', async (interaction) => {
             return;
         }
 
+        if (interaction.isChatInputCommand() && interaction.commandName === 'service-setup') {
+            await handleServiceSetupCommand(interaction);
+            return;
+        }
+
+        if (interaction.isChatInputCommand() && interaction.commandName === 'service-activate') {
+            await handleServiceActivationCommand(interaction, true);
+            return;
+        }
+
+        if (interaction.isChatInputCommand() && interaction.commandName === 'service-deactivate') {
+            await handleServiceActivationCommand(interaction, false);
+            return;
+        }
+
+        if (interaction.isChatInputCommand() && interaction.commandName === 'service-status') {
+            await handleServiceStatusCommand(interaction);
+            return;
+        }
+
         if (!interaction.isButton()) return;
 
         if (interaction.customId === 'server_closed') {
@@ -82,7 +110,7 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if (interaction.customId === 'session_vote_cancel') {
-            if (!memberHasSessionPermissionRole(interaction.member)) {
+            if (!memberHasSessionPermissionRole(interaction.member, interaction.guildId)) {
                 await interaction.reply({
                     content: 'You need the **Session Permission Role** to cancel the vote.',
                     ephemeral: true
@@ -214,18 +242,132 @@ async function registerCommands() {
             .setName('session-shutdown')
             .setDescription('Shut down the active session'));
 
+    const serviceSetupCommand = new SlashCommandBuilder()
+        .setName('service-setup')
+        .setDescription('Configure this Discord server for the ER:LC service')
+        .addChannelOption((option) => option
+            .setName('status-channel')
+            .setDescription('Channel where the ER:LC status will be posted')
+            .addChannelTypes(ChannelType.GuildText)
+            .setRequired(true))
+        .addStringOption((option) => option
+            .setName('erlc-server-key')
+            .setDescription('ER:LC server key for this Discord server')
+            .setRequired(true))
+        .addRoleOption((option) => option
+            .setName('permission-role')
+            .setDescription('Role allowed to manage sessions')
+            .setRequired(true));
+
+    const serviceActivateCommand = new SlashCommandBuilder()
+        .setName('service-activate')
+        .setDescription('Activate the service for this Discord server');
+
+    const serviceDeactivateCommand = new SlashCommandBuilder()
+        .setName('service-deactivate')
+        .setDescription('Deactivate the service for this Discord server');
+
+    const serviceStatusCommand = new SlashCommandBuilder()
+        .setName('service-status')
+        .setDescription('Show this Discord server service status');
+
     try {
-        const statusChannel = await client.channels.fetch(statusChannelId);
-        await client.application.commands.set([command], statusChannel.guildId);
-        console.log('[System] Registered /session-manage on the status channel server.');
+        await client.application.commands.set([
+            command,
+            serviceSetupCommand,
+            serviceActivateCommand,
+            serviceDeactivateCommand,
+            serviceStatusCommand
+        ]);
+        console.log('[System] Registered service and session commands globally.');
     } catch (error) {
         console.error('[System] Slash command registration failed:', error.message);
     }
 }
 
+async function handleServiceSetupCommand(interaction) {
+    if (!interaction.guildId) {
+        await interaction.reply({ content: 'This command must be used inside a Discord server.', ephemeral: true });
+        return;
+    }
+
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        await interaction.reply({ content: 'You need the **Manage Server** permission to configure this service.', ephemeral: true });
+        return;
+    }
+
+    const statusChannel = interaction.options.getChannel('status-channel');
+    const permissionRole = interaction.options.getRole('permission-role');
+    const serverKey = interaction.options.getString('erlc-server-key', true).trim();
+
+    guildStore.saveGuild(interaction.guildId, {
+        ownerId: interaction.guild.ownerId,
+        statusChannelId: statusChannel.id,
+        erlcServerKey: serverKey,
+        permissionRoleId: permissionRole.id,
+        permissionRoleNames: [permissionRole.name]
+    });
+
+    await interaction.reply({
+        content: 'This server has been configured. The service still needs to be activated by the service owner.',
+        ephemeral: true
+    });
+}
+
+async function handleServiceActivationCommand(interaction, active) {
+    if (!botOwnerId || interaction.user.id !== botOwnerId) {
+        await interaction.reply({ content: 'Only the service owner can change service activation.', ephemeral: true });
+        return;
+    }
+
+    if (!interaction.guildId) {
+        await interaction.reply({ content: 'This command must be used inside a Discord server.', ephemeral: true });
+        return;
+    }
+
+    const guildConfig = guildStore.getGuild(interaction.guildId);
+    if (!guildConfig) {
+        await interaction.reply({ content: 'Run /service-setup before activating this server.', ephemeral: true });
+        return;
+    }
+
+    guildStore.saveGuild(interaction.guildId, {
+        active,
+        activatedAt: active ? new Date().toISOString() : null
+    });
+
+    await interaction.reply({
+        content: active ? 'The service is now active for this server.' : 'The service has been deactivated for this server.',
+        ephemeral: true
+    });
+}
+
+async function handleServiceStatusCommand(interaction) {
+    const guildConfig = interaction.guildId ? guildStore.getGuild(interaction.guildId) : null;
+    const status = !guildConfig
+        ? 'Not configured'
+        : guildConfig.active
+            ? 'Active'
+            : 'Configured, awaiting activation';
+
+    await interaction.reply({
+        content: `**Service status:** ${status}`,
+        ephemeral: true
+    });
+}
+
 async function handleSessionManageCommand(interaction) {
+    const guildConfig = interaction.guildId ? guildStore.getGuild(interaction.guildId) : null;
+    if (!guildConfig?.active) {
+        await interaction.reply({
+            content: 'This Discord server does not have an active service subscription.',
+            ephemeral: true
+        });
+        return;
+    }
+
     const member = interaction.member;
-    const hasPermissionRole = memberHasSessionPermissionRole(member);
+    const hasPermissionRole = memberHasSessionPermissionRole(member, interaction.guildId);
 
     if (!hasPermissionRole) {
         await interaction.reply({
@@ -576,12 +718,19 @@ async function findExistingMonitorMessage(channel) {
     )) || null;
 }
 
-function memberHasSessionPermissionRole(member) {
-    if (sessionPermissionRoleId) {
-        return member?.roles?.cache?.has(sessionPermissionRoleId) ?? false;
+function memberHasSessionPermissionRole(member, guildId) {
+    const guildConfig = guildId ? guildStore.getGuild(guildId) : null;
+    const permissionRoleId = guildConfig?.permissionRoleId || sessionPermissionRoleId;
+    const permissionRoleNames = new Set([
+        ...(guildConfig?.permissionRoleNames || []),
+        ...sessionPermissionRoleNames
+    ]);
+
+    if (permissionRoleId) {
+        return member?.roles?.cache?.has(permissionRoleId) ?? false;
     }
 
-    return member?.roles?.cache?.some((role) => sessionPermissionRoleNames.has(role.name)) ?? false;
+    return member?.roles?.cache?.some((role) => permissionRoleNames.has(role.name)) ?? false;
 }
 
 function ensureSessionVoteState(interaction) {
